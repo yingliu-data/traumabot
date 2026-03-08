@@ -146,7 +146,7 @@ def _odom_updater():
                 cmd = _last_command
 
             if human: # and (now - last_log_time >= 0.5):
-                points.append([speed, int(human)])
+                points.append([cmd, int(human)])
                 #log_entry = {
                 #    "ticks": ticks,
                 #    "human_detected": 1,

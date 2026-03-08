@@ -220,3 +220,29 @@ function drawDot(px, py) {
 
 // Draw initial state
 mapDraw(0, 0);
+
+// ---------------------------------------------------------------------------
+// Camera: snapshot polling (works on Safari + always shows latest frame,
+// avoiding MJPEG TCP-buffer lag)
+// ---------------------------------------------------------------------------
+
+const camImg = document.getElementById('cam');
+let _camPending = false;
+
+function _pollCamera() {
+  if (_camPending) return;
+  _camPending = true;
+  const img = new Image();
+  img.onload = () => {
+    camImg.src = img.src;
+    _camPending = false;
+    setTimeout(_pollCamera, 66);   // ~15 fps — tune lower if still laggy
+  };
+  img.onerror = () => {
+    _camPending = false;
+    setTimeout(_pollCamera, 500);  // back off on error
+  };
+  img.src = '/snapshot?t=' + Date.now();
+}
+
+_pollCamera();
