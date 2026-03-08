@@ -290,11 +290,9 @@ def _camera_reader():
                     if nav:
                         nav.stop()
                     with _active_lock:
-                        # Only clear forward/back keys; keep turn keys so driver can steer
+                        # Only clear forward keys; backward and turning still allowed
                         _active_keys.discard('ArrowUp')
-                        _active_keys.discard('ArrowDown')
                         _active_keys.discard('KeyW')
-                        _active_keys.discard('KeyS')
 
             # Draw bounding boxes for every detected object
             h, w = frame.shape[:2]
@@ -378,6 +376,18 @@ def video_feed():
     return Response(_mjpeg_generator(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/snapshot')
+def snapshot():
+    """Return the latest camera frame as a single JPEG.
+    Used by JavaScript polling (works on Safari + avoids MJPEG lag)."""
+    with _camera_lock:
+        frame = _camera_frame
+    if not frame:
+        frame = _make_placeholder_jpg()
+    resp = Response(frame, mimetype='image/jpeg')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
+
 @app.route('/goto', methods=['POST'])
 def goto():
     if nav is None:
@@ -454,7 +464,7 @@ def ws_handler(ws):
             # When a human is detected, block only forward/backward — turning still allowed
             with _human_lock:
                 blocked = _human_detected
-            if blocked and key in ('ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'):
+            if blocked and key in ('ArrowUp', 'KeyW'):
                 continue
 
             # Speed key (digit 1–9)
