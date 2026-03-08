@@ -1,0 +1,16 @@
+[Unit]
+Description=Joy-Car Web Controller
+After=network.target
+
+[Service]
+Type=simple
+User=sota
+WorkingDirectory=/home/sota/joyit
+ExecStart=/home/sota/miniforge3/envs/joyit/bin/python server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

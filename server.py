@@ -40,13 +40,17 @@ _command_lock = threading.Lock()
 
 def _init_hardware():
     global link, odom, nav, _current_speed
-    link = SerialLink()
-    odom = Odometry()
-    nav  = Navigator(link, odom)
-    _current_speed = config.DEFAULT_SPEED
-    link.set_speed(_current_speed)
-    # Encoder polling thread: update odometry from device ticks
-    threading.Thread(target=_odom_updater, daemon=True).start()
+    try:
+        link = SerialLink()
+        odom = Odometry()
+        nav  = Navigator(link, odom)
+        _current_speed = config.DEFAULT_SPEED
+        link.set_speed(_current_speed)
+        # Encoder polling thread: update odometry from device ticks
+        threading.Thread(target=_odom_updater, daemon=True).start()
+    except Exception as e:
+        print(f"WARNING: Hardware not available ({e}). Running in web-only mode.")
+        link = odom = nav = None
 
 def _odom_updater():
     import time
@@ -184,14 +188,22 @@ def _camera_reader():
                     with _active_lock:
                         _active_keys.clear()
 
-                # Annotate frame with landmark dots + red border
+                # Annotate frame with landmark dots + per-person bounding box
                 if results.pose_landmarks:
                     h, w = frame.shape[:2]
                     for landmark_list in results.pose_landmarks:
+                        xs = [lm.x for lm in landmark_list]
+                        ys = [lm.y for lm in landmark_list]
+                        x1 = max(0, int(min(xs) * w) - 10)
+                        y1 = max(0, int(min(ys) * h) - 10)
+                        x2 = min(w - 1, int(max(xs) * w) + 10)
+                        y2 = min(h - 1, int(max(ys) * h) + 10)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 220), 2)
+                        cv2.putText(frame, 'Person', (x1, y1 - 6),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 220), 2)
                         for lm in landmark_list:
                             cx, cy = int(lm.x * w), int(lm.y * h)
                             cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
-                    cv2.rectangle(frame, (0, 0), (w - 1, h - 1), (0, 0, 220), 8)
 
             _, jpg = cv2.imencode('.jpg', frame,
                                   [cv2.IMWRITE_JPEG_QUALITY, config.MJPEG_QUALITY])

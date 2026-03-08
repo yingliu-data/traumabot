@@ -6,7 +6,7 @@
 joyit/
 ├── device/
 │   └── code.py              CircuitPython firmware — runs on the PICO:ED
-├── joycar/                  Host Python package (runs on Mac)
+├── joycar/                  Host Python package (runs on Raspberry Pi)
 │   ├── __init__.py          Package exports (SerialLink, Odometry, Navigator)
 │   ├── serial_link.py       Thread-safe serial interface + background reader
 │   ├── odometry.py          Dead-reckoning pose estimation
@@ -18,15 +18,28 @@ joyit/
 │       ├── style.css        Dark theme stylesheet
 │       └── app.js           WebSocket client, d-pad, canvas trail
 ├── scripts/
+│   ├── deploy_pi.sh         Rsync project to Pi + install/restart systemd service
+│   ├── joyit.service        systemd unit file (auto-start on boot)
 │   ├── upload.sh            Deploy firmware to /Volumes/CIRCUITPY/
 │   └── repl.sh              Open interactive REPL via mpremote
 ├── docs/
 │   └── PROJECT_STRUCTURE.md  This file
-├── server.py                Flask + WebSocket entry point
+├── server.py                Flask + WebSocket + MJPEG + MediaPipe entry point
 ├── config.py                All tuneable constants
 ├── requirements.txt         Python dependencies
 └── README.md                Setup and usage guide
 ```
+
+---
+
+## Deployment
+
+The project runs on **Raspberry Pi 5** with Python 3.12 via Miniforge:
+- Environment: `~/miniforge3/envs/joyit`
+- Service: `/etc/systemd/system/joyit.service` (auto-start on boot)
+- Deploy command (from Mac): `./scripts/deploy_pi.sh sota@<PI_IP>`
+
+Access via SSH tunnel: `ssh -L 8080:localhost:8080 sota@<PI_IP>` → `http://localhost:8080`
 
 ---
 
@@ -58,16 +71,22 @@ server.py  (WebSocket push: {"type":"pose","x":…,"y":…,"theta":…})
 Browser  (canvas trail + telemetry display)
 ```
 
-Camera stream (separate path):
+Camera + human detection (separate path):
 ```
-USB webcam  →  cv2.VideoCapture  →  MJPEG /video_feed route  →  <img> in browser
+USB webcam
+  → cv2.VideoCapture
+  → MediaPipe PoseLandmarker (every 3rd frame)
+      → bounding box + landmark dots drawn on frame
+      → human flag → stops robot on rising edge
+  → MJPEG /video_feed route
+  → <img> in browser
 ```
 
 ---
 
 ## Serial Protocol
 
-### Mac → Device
+### Pi → Device
 
 | Bytes | Meaning |
 |-------|---------|
@@ -80,7 +99,7 @@ USB webcam  →  cv2.VideoCapture  →  MJPEG /video_feed route  →  <img> in b
 | `\x03` | Ctrl+C — interrupt running code (sent on connect) |
 | `\x04` | Ctrl+D — soft reset, relaunch code.py (sent on connect) |
 
-### Device → Mac
+### Device → Pi
 
 | Format | Meaning |
 |--------|---------|
@@ -121,6 +140,18 @@ The pose is stored in mm internally and exposed in cm via `Odometry.pose()`.
 2. **Compute heading error**: `target_angle = atan2(ty - y, tx - x)`, then `error = target_angle - theta`, normalised to `[-180°, 180°]`.
 3. **Turn phase**: if `|error| > HEADING_THRESH_DEG` → send turn command at `MIN_SPEED`.
 4. **Drive phase**: send forward command; speed = `MIN_SPEED + (MAX_SPEED - MIN_SPEED) × min(1, dist / 50cm)` — decelerates in the last 50 cm.
+
+---
+
+## Human Detection
+
+MediaPipe `PoseLandmarkerOptions` runs in `VIDEO` mode on every 3rd frame to limit CPU usage.
+
+When a person is detected:
+- A **bounding box** is drawn around each person (min/max of landmark coordinates ± 10 px padding) with a "Person" label
+- Green **landmark dots** are drawn at each body keypoint
+- On the **rising edge** (first frame a person appears): robot stops, navigator cancelled, active keys cleared
+- All movement commands are blocked while a person is in frame
 
 ---
 

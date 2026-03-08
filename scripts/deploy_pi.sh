@@ -18,10 +18,25 @@ rsync -avz \
   --exclude='pose_landmarker_lite.task' \
   "${PROJECT_ROOT}/" "${DEST}:~/joyit/"
 
+echo "Setting up autostart service..."
+ssh "${DEST}" bash << 'REMOTE'
+set -e
+# Install systemd service
+sudo cp ~/joyit/scripts/joyit.service /etc/systemd/system/joyit.service
+sudo systemctl daemon-reload
+sudo systemctl enable joyit
+sudo systemctl restart joyit
+echo "Service status:"
+sudo systemctl status joyit --no-pager
+REMOTE
+
 echo ""
-echo "Done. On the Pi, run:"
-echo "  cd ~/joyit && source .venv/bin/activate && python server.py"
+echo "Done! Server is running and will auto-start on boot."
 echo ""
-echo "Then on your Mac, open an SSH tunnel:"
-echo "  ssh -L 8080:localhost:8080 ${DEST}"
-echo "  Open: http://127.0.0.1:8080"
+echo "Useful commands on the Pi:"
+echo "  sudo systemctl status joyit   # check status"
+echo "  sudo journalctl -u joyit -f   # live logs"
+echo "  sudo systemctl restart joyit  # restart"
+echo ""
+echo "Access from your Mac:"
+echo "  http://raspberrypi.local:8080"
