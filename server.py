@@ -6,8 +6,15 @@ Then open: http://localhost:5000
 
 import time
 import json
+import os
+from datetime import datetime
 
-log_file = open("robot_log.jsonl", "a")
+os.makedirs("logs", exist_ok=True)
+run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_filename = f"logs/robot_log_{run_timestamp}.jsonl"
+
+log_file = open(log_filename, "a")
+print(f"Logging to {log_filename}")
 
 
 import threading
@@ -42,6 +49,8 @@ _command_lock = threading.Lock()
 _last_serial_cmd      = None
 _last_serial_cmd_lock = threading.Lock()
 
+points = []
+
 def _init_hardware():
     global link, odom, nav, _current_speed
     try:
@@ -73,6 +82,7 @@ def _init_hardware():
 def _odom_updater():
     import time
 
+    global log_filename
     last_log_time   = 0
     last_ticks      = (0, 0)
     last_status_t   = 0   # for periodic heartbeat every 5 s
@@ -132,15 +142,23 @@ def _odom_updater():
             with _command_lock:
                 cmd = _last_command
 
-            if human and (now - last_log_time >= 0.5):
-                log_entry = {
-                    "ticks": ticks,
-                    "human_detected": 1,
-                    "command": cmd,
-                }
-                log_file.write(json.dumps(log_entry) + "\n")
-                log_file.flush()
+            if human: # and (now - last_log_time >= 0.5):
+                points.append([speed, int(human)])
+                #log_entry = {
+                #    "ticks": ticks,
+                #    "human_detected": 1,
+                #    "command": cmd,
+                #}
+                #log_file.write(json.dumps(log_entry) + "\n")
+                #log_file.flush()
+            
+            if now - last_log_time >= 0.5:
+                #points.append([int(speed), int(human)])
+                with open(log_filename, "w") as f:
+                    json.dump({"points": points}, f, indent=2)
                 last_log_time = now
+    
+                #last_log_time = now
 
         except Exception as e:
             print(f"[odom] updater error: {e}")
