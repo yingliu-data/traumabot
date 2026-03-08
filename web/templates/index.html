@@ -17,34 +17,26 @@
 </div>
 
 <main>
-  <!-- Left column: camera + odometry map -->
+  <!-- Column 1: camera -->
   <section class="left-panel">
     <div class="camera-box">
       <img id="cam" src="/video_feed" alt="Camera feed">
       <div id="cam-overlay">No camera</div>
     </div>
-
-    <div class="map-section">
-      <div class="map-header">
-        <span>Odometry trail</span>
-        <button id="btn-reset-pose">Reset</button>
-      </div>
-      <canvas id="map" width="300" height="300"></canvas>
-    </div>
   </section>
 
-  <!-- Right column: telemetry + controls -->
+  <!-- Column 2: telemetry + controls -->
   <section class="right-panel">
 
     <div class="telemetry">
       <div class="telem-row"><span class="label">X</span><span id="t-x" class="value">0.0 cm</span></div>
       <div class="telem-row"><span class="label">Y</span><span id="t-y" class="value">0.0 cm</span></div>
-      <div class="telem-row"><span class="label">Heading</span><span id="t-theta" class="value">0°</span></div>
+      <div class="telem-row"><span class="label">Heading</span><span id="t-theta" class="value">0&deg;</span></div>
       <div class="telem-row"><span class="label">Speed</span><span id="t-speed" class="value">120</span></div>
     </div>
 
     <div class="speed-section">
-      <label for="speed-slider">Speed (1–9 keys)</label>
+      <label for="speed-slider">Speed (1&ndash;9 keys)</label>
       <input id="speed-slider" type="range" min="40" max="180" step="1" value="120">
       <div class="speed-labels"><span>Slow</span><span>Fast</span></div>
     </div>
@@ -68,9 +60,20 @@
     </div>
 
     <div class="keys-hint">
-      Arrow keys / WASD to drive &bull; 1–9 to set speed &bull; Space to stop
+      Arrow keys / WASD to drive &bull; 1&ndash;9 to set speed &bull; Space to stop
     </div>
 
+  </section>
+
+  <!-- Column 3: odometry trail -->
+  <section class="map-panel">
+    <div class="map-section">
+      <div class="map-header">
+        <span>Odometry trail</span>
+        <button id="btn-reset-pose">Reset</button>
+      </div>
+      <canvas id="map" width="300" height="300"></canvas>
+    </div>
   </section>
 </main>
 

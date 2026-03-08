@@ -47,13 +47,16 @@ def _init_hardware():
     try:
         print(f"[hw] Opening serial port {config.SERIAL_PORT} ...")
         link = SerialLink()
-        # Monkey-patch link.send() so every command is visible to the odom updater
+        # Monkey-patch link.send() so every command is visible to the odom updater.
+        # Also swap directions: motors are physically reversed, so w<->s and a<->d.
+        # Fixing it here covers keyboard, navigator, and time-based odometry.
         _orig_send = link.send
+        _DIR_SWAP = {b'w': b's', b's': b'w', b'a': b'd', b'd': b'a'}
         def _tracked_send(b):
             global _last_serial_cmd
-            _orig_send(b)
+            _orig_send(_DIR_SWAP.get(b, b))   # send physically-correct byte
             with _last_serial_cmd_lock:
-                _last_serial_cmd = b
+                _last_serial_cmd = b           # store logical byte for odometry
         link.send = _tracked_send
         print(f"[hw] Serial OK. Initialising odometry + navigator ...")
         odom = Odometry()
