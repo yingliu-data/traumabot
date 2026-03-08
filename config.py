@@ -26,6 +26,8 @@ TRACK_WIDTH_MM = 160    # axle-to-axle distance; measure on your chassis
 DEFAULT_SPEED  = 120    # PWM value sent on startup (0–180)
 MIN_SPEED      = 40     # slowest speed used by navigator
 MAX_SPEED      = 180    # fastest allowed PWM
+SPEED_MMPS_AT_MAX = 350  # mm/s the car travels at MAX_SPEED PWM (encoder fallback)
+                          # Calibrate: time the car over 100 cm at full speed
 
 # --- Navigator ---
 STOP_RADIUS_CM    = 5   # declare waypoint reached when within this distance

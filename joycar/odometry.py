@@ -57,6 +57,14 @@ class Odometry:
                 'theta': round(math.degrees(self._theta), 1),
             }
 
+    def push_delta(self, dist_mm: float, d_theta_rad: float) -> None:
+        """Inject a motion delta directly — used for time-based dead reckoning
+        when encoder ticks are not available."""
+        with self._lock:
+            self._theta += d_theta_rad
+            self._x += dist_mm * math.cos(self._theta)
+            self._y += dist_mm * math.sin(self._theta)
+
     def reset(self, left_baseline: int = 0, right_baseline: int = 0) -> None:
         """Zero the pose.  Pass the device's current tick counts so the first
         update after reset computes a delta of zero instead of a large jump."""

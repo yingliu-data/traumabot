@@ -38,60 +38,127 @@ _current_speed   = config.DEFAULT_SPEED
 _last_command = None
 _command_lock = threading.Lock()
 
+# Last byte sent over serial — tracked for time-based odometry fallback
+_last_serial_cmd      = None
+_last_serial_cmd_lock = threading.Lock()
+
 def _init_hardware():
     global link, odom, nav, _current_speed
     try:
+        print(f"[hw] Opening serial port {config.SERIAL_PORT} ...")
         link = SerialLink()
+        # Monkey-patch link.send() so every command is visible to the odom updater
+        _orig_send = link.send
+        def _tracked_send(b):
+            global _last_serial_cmd
+            _orig_send(b)
+            with _last_serial_cmd_lock:
+                _last_serial_cmd = b
+        link.send = _tracked_send
+        print(f"[hw] Serial OK. Initialising odometry + navigator ...")
         odom = Odometry()
         nav  = Navigator(link, odom)
         _current_speed = config.DEFAULT_SPEED
         link.set_speed(_current_speed)
+        print(f"[hw] Hardware ready. Speed={_current_speed}")
         # Encoder polling thread: update odometry from device ticks
         threading.Thread(target=_odom_updater, daemon=True).start()
+        # Command repeater: re-send active drive command every 150ms so the
+        # device's 400ms safety timeout never fires while a key is held
+        threading.Thread(target=_cmd_repeater, daemon=True).start()
     except Exception as e:
-        print(f"WARNING: Hardware not available ({e}). Running in web-only mode.")
+        print(f"[hw] WARNING: Hardware not available ({e}). Running in web-only mode.")
         link = odom = nav = None
 
 def _odom_updater():
     import time
 
-    last_log_time  = 0
-    last_tick_log  = 0
-    last_ticks     = (0, 0)
+    last_log_time   = 0
+    last_ticks      = (0, 0)
+    last_status_t   = 0   # for periodic heartbeat every 5 s
+    encoder_online  = False  # flips True the first time ticks actually change
+
+    print("[odom] updater thread started")
 
     while True:
         try:
-            if link and odom:
-                ticks = link.get_ticks()
-                odom.update(*ticks)
+            now = time.time()
 
-                # Debug: print when ticks change, so you can confirm encoders work
-                if ticks != last_ticks:
-                    last_ticks = ticks
-                    print(f"[odom] ticks L={ticks[0]} R={ticks[1]}  pose={odom.pose()}")
+            if not link or not odom:
+                # Print once every 5 s so it's clear hardware is missing
+                if now - last_status_t >= 5:
+                    print("[odom] WARNING: link or odom is None — hardware not connected")
+                    last_status_t = now
+                time.sleep(0.5)
+                continue
 
-                with _human_lock:
-                    human = _human_detected
+            ticks = link.get_ticks()
+            odom.update(*ticks)
 
-                now = time.time()
+            # Always print status every 5 s so you can see the thread is alive
+            if now - last_status_t >= 5:
+                mode = 'encoder' if encoder_online else 'TIME-BASED fallback'
+                print(f"[odom] heartbeat ({mode}) ticks L={ticks[0]} R={ticks[1]}  pose={odom.pose()}")
+                last_status_t = now
 
-                with _command_lock:
-                    cmd = _last_command
+            # Also print immediately whenever ticks change
+            if ticks != last_ticks:
+                if not encoder_online:
+                    print("[odom] encoder online — switching from time-based to encoder odometry")
+                encoder_online = True
+                last_ticks = ticks
+                print(f"[odom] tick change L={ticks[0]} R={ticks[1]}  pose={odom.pose()}")
 
-                if human and (now - last_log_time >= 0.5):
-                    log_entry = {
-                        "ticks": ticks,
-                        "human_detected": 1,
-                        "command": cmd,
-                    }
-                    log_file.write(json.dumps(log_entry) + "\n")
-                    log_file.flush()
-                    last_log_time = now
+            # ----------------------------------------------------------------
+            # Time-based dead reckoning fallback (encoder disc not in sensor)
+            # When encoder ticks never move, estimate pose from commanded motion.
+            # Switch back automatically the moment real ticks appear.
+            # ----------------------------------------------------------------
+            if not encoder_online:
+                with _last_serial_cmd_lock:
+                    cmd = _last_serial_cmd
+                if cmd and cmd != b' ':
+                    speed_mmps = config.SPEED_MMPS_AT_MAX * (_current_speed / config.MAX_SPEED)
+                    dist = speed_mmps * 0.05   # 50 ms per loop iteration
+                    half_track = config.TRACK_WIDTH_MM / 2.0
+                    if   cmd == b'w': odom.push_delta( dist,  0.0)
+                    elif cmd == b's': odom.push_delta(-dist,  0.0)
+                    elif cmd == b'd': odom.push_delta( 0.0,  -dist / half_track)
+                    elif cmd == b'a': odom.push_delta( 0.0,   dist / half_track)
+
+            with _human_lock:
+                human = _human_detected
+
+            with _command_lock:
+                cmd = _last_command
+
+            if human and (now - last_log_time >= 0.5):
+                log_entry = {
+                    "ticks": ticks,
+                    "human_detected": 1,
+                    "command": cmd,
+                }
+                log_file.write(json.dumps(log_entry) + "\n")
+                log_file.flush()
+                last_log_time = now
 
         except Exception as e:
             print(f"[odom] updater error: {e}")
 
         time.sleep(0.05)
+
+def _cmd_repeater():
+    """Re-send the current drive command every 150ms to prevent the device's
+    400ms safety timeout from stopping the motors while a key is held down."""
+    import time
+    while True:
+        time.sleep(0.15)
+        if link:
+            with _last_serial_cmd_lock:
+                cmd = _last_serial_cmd
+            # Only repeat actual drive commands — not stop (b' ')
+            if cmd and cmd != b' ':
+                link.send(cmd)
 
 # ---------------------------------------------------------------------------
 # Camera (MJPEG)
