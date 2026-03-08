@@ -4,6 +4,12 @@ Run with:  python server.py
 Then open: http://localhost:5000
 """
 
+import time
+import json
+
+log_file = open("robot_log.jsonl", "a")
+
+
 import threading
 import json
 import cv2
@@ -24,11 +30,13 @@ sock = Sock(app)
 # ---------------------------------------------------------------------------
 # Hardware init (deferred so import works without device connected)
 # ---------------------------------------------------------------------------
-
 link: SerialLink = None
 odom: Odometry   = None
 nav:  Navigator  = None
 _current_speed   = config.DEFAULT_SPEED
+
+_last_command = None
+_command_lock = threading.Lock()
 
 def _init_hardware():
     global link, odom, nav, _current_speed
@@ -42,9 +50,37 @@ def _init_hardware():
 
 def _odom_updater():
     import time
+    
+    last_log_time = 0
+    
     while True:
         if link:
             odom.update(*link.get_ticks())
+
+            with _human_lock:
+                human = _human_detected
+
+            now = time.time()
+            
+            with _command_lock:
+                cmd = _last_command
+
+            # Log only every 0.5 seconds AND only if a human is detected
+            if human and (now - last_log_time >= 0.5):
+
+                speed = getattr(odom, "v", 0)
+
+                log_entry = {
+                    "speed": speed,
+                    "human_detected": 1,
+                    "command": cmd
+                }
+
+                log_file.write(json.dumps(log_entry) + "\n")
+                log_file.flush()
+
+                last_log_time = now
+
         time.sleep(0.05)
 
 # ---------------------------------------------------------------------------
@@ -81,7 +117,7 @@ def _ensure_pose_model():
 
 def _camera_reader():
     import time, os
-    global _camera_frame, _human_detected
+    global _camera_frame, _human_detected, _last_command
 
     # Tasks API — works with mediapipe 0.10.x
     model_path = _ensure_pose_model()
@@ -140,7 +176,9 @@ def _camera_reader():
                 # On rising edge: immediately stop robot + cancel navigator + clear held keys
                 if detected and not prev:
                     if link:
-                        link.send(b' ')
+                    	with _command_lock:
+                    		_last_command = "stop"
+                    	link.send(b' ')
                     if nav:
                         nav.stop()
                     with _active_lock:
