@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# MediaPipe model (large binary, auto-downloaded on first run)
+pose_landmarker_lite.task
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

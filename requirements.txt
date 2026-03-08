@@ -1,0 +1,7 @@
+mpremote
+pyserial
+flask
+flask-sock
+opencv-python-headless
+numpy
+mediapipe
