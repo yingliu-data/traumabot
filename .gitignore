@@ -4,8 +4,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# MediaPipe model (large binary, auto-downloaded on first run)
+# MediaPipe models (large binaries, auto-downloaded on first run)
 pose_landmarker_lite.task
+efficientdet_lite2.tflite
 
 # macOS
 .DS_Store

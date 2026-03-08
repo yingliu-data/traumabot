@@ -54,36 +54,42 @@ def _init_hardware():
 
 def _odom_updater():
     import time
-    
-    last_log_time = 0
-    
+
+    last_log_time  = 0
+    last_tick_log  = 0
+    last_ticks     = (0, 0)
+
     while True:
-        if link:
-            odom.update(*link.get_ticks())
+        try:
+            if link and odom:
+                ticks = link.get_ticks()
+                odom.update(*ticks)
 
-            with _human_lock:
-                human = _human_detected
+                # Debug: print when ticks change, so you can confirm encoders work
+                if ticks != last_ticks:
+                    last_ticks = ticks
+                    print(f"[odom] ticks L={ticks[0]} R={ticks[1]}  pose={odom.pose()}")
 
-            now = time.time()
-            
-            with _command_lock:
-                cmd = _last_command
+                with _human_lock:
+                    human = _human_detected
 
-            # Log only every 0.5 seconds AND only if a human is detected
-            if human and (now - last_log_time >= 0.5):
+                now = time.time()
 
-                speed = getattr(odom, "v", 0)
+                with _command_lock:
+                    cmd = _last_command
 
-                log_entry = {
-                    "speed": speed,
-                    "human_detected": 1,
-                    "command": cmd
-                }
+                if human and (now - last_log_time >= 0.5):
+                    log_entry = {
+                        "ticks": ticks,
+                        "human_detected": 1,
+                        "command": cmd,
+                    }
+                    log_file.write(json.dumps(log_entry) + "\n")
+                    log_file.flush()
+                    last_log_time = now
 
-                log_file.write(json.dumps(log_entry) + "\n")
-                log_file.flush()
-
-                last_log_time = now
+        except Exception as e:
+            print(f"[odom] updater error: {e}")
 
         time.sleep(0.05)
 
@@ -107,45 +113,49 @@ def _make_placeholder_jpg(text='No camera'):
     _, jpg = cv2.imencode('.jpg', img)
     return jpg.tobytes()
 
-def _ensure_pose_model():
-    """Download the MediaPipe pose landmarker model if not already present."""
+def _ensure_object_model():
+    """Download the MediaPipe EfficientDet Lite-2 object detection model if not present."""
     import os, urllib.request
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pose_landmarker_lite.task')
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'efficientdet_lite2.tflite')
     if not os.path.exists(path):
-        url = ('https://storage.googleapis.com/mediapipe-models/pose_landmarker/'
-               'pose_landmarker_lite/float16/latest/pose_landmarker_lite.task')
-        print('Downloading MediaPipe pose model (~5 MB)...')
+        url = ('https://storage.googleapis.com/mediapipe-models/object_detector/'
+               'efficientdet_lite2/int8/latest/efficientdet_lite2.tflite')
+        print('Downloading MediaPipe object detection model (~7 MB)...')
         urllib.request.urlretrieve(url, path)
-        print('Pose model ready.')
+        print('Object detection model ready.')
     return path
 
+# Colours for bounding boxes — person gets red, everything else gets cyan/green
+_BOX_PERSON_COLOUR = (0,   0,   220)   # BGR red
+_BOX_OTHER_COLOUR  = (0,   200,  80)   # BGR green
+
 def _camera_reader():
-    import time, os
+    import time
     global _camera_frame, _human_detected, _last_command
 
-    # Tasks API — works with mediapipe 0.10.x
-    model_path = _ensure_pose_model()
-    PoseLandmarker        = mp.tasks.vision.PoseLandmarker
-    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
-    RunningMode           = mp.tasks.vision.RunningMode
+    model_path      = _ensure_object_model()
+    ObjectDetector  = mp.tasks.vision.ObjectDetector
+    DetectorOptions = mp.tasks.vision.ObjectDetectorOptions
+    RunningMode     = mp.tasks.vision.RunningMode
 
-    options = PoseLandmarkerOptions(
+    options = DetectorOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
         running_mode=RunningMode.VIDEO,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
+        score_threshold=0.45,   # raise to reduce false positives
+        max_results=20,
     )
 
     # Serve placeholder until a camera is available
     with _camera_lock:
         _camera_frame = _make_placeholder_jpg()
 
-    cap     = None
-    frame_n = 0
-    t_start = time.time()
+    cap        = None
+    frame_n    = 0
+    t_start    = time.time()
+    # Keep the last detection result so we can draw boxes on skipped frames too
+    last_detections = []
 
-    with PoseLandmarker.create_from_options(options) as detector:
+    with ObjectDetector.create_from_options(options) as detector:
         while True:
             # (Re)open camera if needed
             if cap is None or not cap.isOpened():
@@ -165,45 +175,68 @@ def _camera_reader():
                 continue
 
             frame_n += 1
-            # Run pose detection every 3 frames to keep CPU usage low
+            # Run detection every 3 frames to keep CPU usage low
             if frame_n % 3 == 0:
                 rgb          = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image     = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 timestamp_ms = int((time.time() - t_start) * 1000)
                 results      = detector.detect_for_video(mp_image, timestamp_ms)
-                detected     = len(results.pose_landmarks) > 0
+                last_detections = results.detections  # list of Detection objects
+
+                detected = any(
+                    d.categories[0].category_name == 'person'
+                    for d in last_detections
+                    if d.categories
+                )
 
                 with _human_lock:
                     prev            = _human_detected
                     _human_detected = detected
 
-                # On rising edge: immediately stop robot + cancel navigator + clear held keys
+                # On rising edge: stop forward/back + cancel navigator, but allow turning
                 if detected and not prev:
                     if link:
-                    	with _command_lock:
-                    		_last_command = "stop"
-                    	link.send(b' ')
+                        with _command_lock:
+                            _last_command = "stop"
+                        link.send(b' ')
                     if nav:
                         nav.stop()
                     with _active_lock:
-                        _active_keys.clear()
+                        # Only clear forward/back keys; keep turn keys so driver can steer
+                        _active_keys.discard('ArrowUp')
+                        _active_keys.discard('ArrowDown')
+                        _active_keys.discard('KeyW')
+                        _active_keys.discard('KeyS')
 
-                # Annotate frame with landmark dots + per-person bounding box
-                if results.pose_landmarks:
-                    h, w = frame.shape[:2]
-                    for landmark_list in results.pose_landmarks:
-                        xs = [lm.x for lm in landmark_list]
-                        ys = [lm.y for lm in landmark_list]
-                        x1 = max(0, int(min(xs) * w) - 10)
-                        y1 = max(0, int(min(ys) * h) - 10)
-                        x2 = min(w - 1, int(max(xs) * w) + 10)
-                        y2 = min(h - 1, int(max(ys) * h) + 10)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 220), 2)
-                        cv2.putText(frame, 'Person', (x1, y1 - 6),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 220), 2)
-                        for lm in landmark_list:
-                            cx, cy = int(lm.x * w), int(lm.y * h)
-                            cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+            # Draw bounding boxes for every detected object
+            h, w = frame.shape[:2]
+            for det in last_detections:
+                if not det.categories:
+                    continue
+                cat   = det.categories[0]
+                label = cat.category_name
+                score = cat.score
+                bb    = det.bounding_box   # origin_x/y, width, height — pixel coords
+
+                x1 = max(0,     int(bb.origin_x))
+                y1 = max(0,     int(bb.origin_y))
+                x2 = min(w - 1, int(bb.origin_x + bb.width))
+                y2 = min(h - 1, int(bb.origin_y + bb.height))
+
+                colour = _BOX_PERSON_COLOUR if label == 'person' else _BOX_OTHER_COLOUR
+                cv2.rectangle(frame, (x1, y1), (x2, y2), colour, 2)
+
+                caption = f'{label} {score:.0%}'
+                # Black background behind text for readability
+                (tw, th), baseline = cv2.getTextSize(
+                    caption, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                ty = max(y1 - 4, th + 4)
+                cv2.rectangle(frame,
+                              (x1, ty - th - baseline - 2),
+                              (x1 + tw + 4, ty + baseline - 2),
+                              colour, cv2.FILLED)
+                cv2.putText(frame, caption, (x1 + 2, ty - 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
 
             _, jpg = cv2.imencode('.jpg', frame,
                                   [cv2.IMWRITE_JPEG_QUALITY, config.MJPEG_QUALITY])
@@ -259,6 +292,8 @@ def video_feed():
 
 @app.route('/goto', methods=['POST'])
 def goto():
+    if nav is None:
+        return jsonify(status='error', msg='Hardware not connected'), 503
     data = request.get_json(force=True)
     x = float(data.get('x', 0))
     y = float(data.get('y', 0))
@@ -267,12 +302,19 @@ def goto():
 
 @app.route('/stop', methods=['POST'])
 def stop_all():
-    nav.stop()
+    if nav:
+        nav.stop()
+    elif link:
+        link.send(b' ')
     return jsonify(status='ok')
 
 @app.route('/reset_pose', methods=['POST'])
 def reset_pose():
-    odom.reset()
+    if odom is None:
+        return jsonify(status='error', msg='Hardware not connected'), 503
+    # Pass current device tick counts as baseline so the first delta is zero
+    current_ticks = link.get_ticks() if link else (0, 0)
+    odom.reset(*current_ticks)
     return jsonify(status='ok')
 
 # ---------------------------------------------------------------------------
@@ -318,13 +360,14 @@ def ws_handler(ws):
         mtype = data.get('type')
 
         if mtype == 'key':
-            with _human_lock:
-                blocked = _human_detected
-            if blocked:
-                continue  # Ignore all movement commands while human is present
-
             key  = data.get('key', '')
             down = data.get('down', False)
+
+            # When a human is detected, block only forward/backward — turning still allowed
+            with _human_lock:
+                blocked = _human_detected
+            if blocked and key in ('ArrowUp', 'ArrowDown', 'KeyW', 'KeyS'):
+                continue
 
             # Speed key (digit 1–9)
             if key in _SPEED_KEYS:

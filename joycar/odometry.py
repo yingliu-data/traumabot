@@ -57,7 +57,10 @@ class Odometry:
                 'theta': round(math.degrees(self._theta), 1),
             }
 
-    def reset(self) -> None:
+    def reset(self, left_baseline: int = 0, right_baseline: int = 0) -> None:
+        """Zero the pose.  Pass the device's current tick counts so the first
+        update after reset computes a delta of zero instead of a large jump."""
         with self._lock:
             self._x = self._y = self._theta = 0.0
-            self._prev_left = self._prev_right = 0
+            self._prev_left  = left_baseline
+            self._prev_right = right_baseline

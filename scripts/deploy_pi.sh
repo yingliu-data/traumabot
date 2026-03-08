@@ -16,6 +16,7 @@ rsync -avz \
   --exclude='*.pyc' \
   --exclude='.git' \
   --exclude='pose_landmarker_lite.task' \
+  --exclude='efficientdet_lite2.tflite' \
   "${PROJECT_ROOT}/" "${DEST}:~/joyit/"
 
 echo "Setting up autostart service..."
